@@ -1,0 +1,604 @@
+/*
+(C) X-ITEC Boris Köster 2008-2012
+
+GPL... 
+
+*/
+#include <strings.h>
+#include <string.h>
+#include <stdio.h>
+#include <iostream> 
+#include <string>
+
+#define DEBUGME
+#include <xbk/xbkdebug.c>
+
+
+class libxbkbtree_error
+{
+public:
+int errorcode;//0=ok, 1=Sucheintrag nicht gefunden
+};
+
+class libxbkbtree_error_notfound : public libxbkbtree_error
+{
+public:
+libxbkbtree_error_notfound();
+};
+
+libxbkbtree_error_notfound::libxbkbtree_error_notfound()
+{
+errorcode=1;
+}
+
+/**
+Virtuelle Basisklasse fuer alle TREE Implementationen
+*/
+
+
+template <class T_CONTAINERINHALT>
+class xbkbtree_base
+{
+protected:
+string index;   //der Suchbegriff
+T_CONTAINERINHALT content; //der Parameter einer Suche
+
+public:
+virtual void add(string index_p, T_CONTAINERINHALT content_p)=0;
+virtual void del(string index_p)=0;
+virtual T_CONTAINERINHALT find(string index_p)=0;
+};
+
+
+
+
+
+
+
+
+template <class T_CONTAINERINHALT>
+class libxbkbtree : public xbkbtree_base<T_CONTAINERINHALT>
+{
+
+int deleted;//0=ok,1=deleted
+libxbkbtree *l,*r,*v;//links, rechts, Vorgaenger
+
+
+//Diese Moeglichkeiten sind noch nicht verfuegbar: 
+libxbkbtree *horiz_l,*horiz_r;//horizontal rechter Node, horizontal linker Node
+int pos_h,pos_v;//Horizontale/Vertikale Position dieses Nodes.0/0=root
+
+private:
+/**
+Nicht-rekursive Loeschung eines Nodes.
+Die Nachfolger des Nodes muessen vorher schon behandelt worden sein
+weil dieser Node nur sich selbst loescht als einzelnes Element
+und damit keine rekursive Loeschung stattfindet. Das bedeutet
+es wird ein Node fuer sich ganz allein geloescht, ohne
+Beruecksichtigung von Vorgaenger oder Nachfolger. Die Werte 
+l, r und v werden absichtlich auf NULL gesetzt, damit der Destruktor
+keine rekursiven Loeschaktionen ausloest.
+*/
+void destroynode(libxbkbtree *node);
+
+/**
+Diese Funktion sucht von einem Node einen passenden linken oder rechten,
+unteren Nachfolger oder wenn leer dann sucht die Routine links (0) oder 
+rechts (1) weiter. Es wird ein passender Node oder NULL zurueckgegeben.
+*/
+libxbkbtree* nb_find(libxbkbtree *startnode,int searchdirection);
+public:
+libxbkbtree *root;
+libxbkbtree();
+~libxbkbtree();
+libxbkbtree* findnode(libxbkbtree *startpos, string index_p);
+
+/**
+Diese Funktion ermittelt den Nachbar eines Nodes, der dann
+auch im Node eingetragen wird. 0=linken Nachbar ermitteln,
+1=rechten Nachbar ermitteln. Beide Nodes werden dann entsprechend
+mit den notwendigen Infos versorgt.
+*/
+void nb(libxbkbtree *node,int searchdirection);  
+
+/**
+Ermittelt, ob dieser Node links(0) oder rechts(1) unter einem 
+uebergeordneten Node steht.
+*/
+int nodepos(libxbkbtree *node);
+/**
+Fuegt einen Container mit dem Index index_p ein
+*/
+void add(string index_p, T_CONTAINERINHALT content_p);
+/**
+Fuegt einen fertigen Node ab einer Startposition ein (automatische
+Suche nach freiem Platz)
+*/
+void addnode(libxbkbtree *startpos, libxbkbtree *node);
+T_CONTAINERINHALT find(string index_p);
+/**
+Loescht ein Element mit dem Bezeichner index_p und verkettet
+die anderen Elemente entsprechend, sodass der Baum weiterhin funktioniert.
+*/
+void del(string index_p);
+/**
+Loescht das Element mit dem Bezeichner index_p sowie saemtliche
+Nachfolger dieses Elements im Tree, indem es einfach eine rekursive
+Loeschung durch die Destruktoren ausloest.Wenn rootstart==NULL ist,
+dann wird der Eintrag index_p ab dem Kopf des Baumes gesucht, sonst erst
+ab Position rootstart.
+*/
+void deltree(libxbkbtree* rootstart, string index_p);
+libxbkbtree* findnext(libxbkbtree *rootstart,string index_p);
+
+/**
+Inorder-Traversierung und Bestimmung des rechten Nachbarn
+(also nicht node->r sondern node->horiz_r)
+*/
+void traverse_inorder_nb(libxbkbtree *startnode);
+} ;
+
+
+template <class T_CONTAINERINHALT>
+libxbkbtree<T_CONTAINERINHALT>* libxbkbtree<T_CONTAINERINHALT>::nb_find(libxbkbtree *startnode,int searchdirection)
+{
+libxbkbtree *tmpnode1=startnode;
+libxbkbtree *tmpnode2=NULL;
+
+if(searchdirection==1)//nach rechts
+	{
+
+		for(;;)
+			{
+				if(tmpnode1==NULL){break;}else
+				if(searchdirection==1)	{
+				if(tmpnode1->l!=NULL){tmpnode2=tmpnode1->l;break;}else
+                                if(tmpnode1->r!=NULL){tmpnode2=tmpnode1->r;break;}
+							}else
+				if(searchdirection==0)	{
+				if(tmpnode1->r!=NULL){tmpnode2=tmpnode1->r;break;}
+				if(tmpnode1->l!=NULL){tmpnode2=tmpnode1->l;break;}
+							}//searchdirection==0
+							
+                                {tmpnode1=tmpnode1->horiz_r;}
+                        }
+
+	}
+return tmpnode2;
+}
+
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::traverse_inorder_nb(libxbkbtree<T_CONTAINERINHALT> *startnode)
+{
+if(startnode!=NULL)
+	{
+	// xxx
+	DEBUG("Element: %s",startnode->index.c_str());
+	DEBUG("---Konstruktion Ebene-Partner");
+	nb(startnode,1);//nach rechts 
+	DEBUG("---Konstruktion fertig.");
+	DEBUG("weiter..");
+	DEBUG("Traversierung linker Subnode");
+	traverse_inorder_nb(startnode->l);
+	DEBUG("Traversierung rechter Subnode");
+	traverse_inorder_nb(startnode->r);
+	}
+	DEBUG("*");
+}
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::nb(libxbkbtree<T_CONTAINERINHALT> *node,int searchdirection)
+{
+DEBUG("nb startet");
+DEBUG("Ermittle Nodeposition");
+int npos=nodepos(node);
+DEBUG("Pos =%i",npos);
+
+libxbkbtree *tmpnode1,*tmpnode2;
+
+/*
+Situation:
+Linker Node, rechten Nachbar ermitteln, Suchfolge 1 (nach rechts)
+*/
+
+if(npos==0 && searchdirection==1)
+{
+
+	//Der einfachste Fall:
+	node->horiz_r=NULL;
+	if(node)if(node->v)if(node->v->r)
+		{
+		DEBUG("Der direkte rechte Node horiz_r von %s ist %s",node->index.c_str(),node->v->r->index.c_str());
+	  node->horiz_r=node->v->r;//der rechte Node meines Vorgaengers
+		}
+	if(node->horiz_r==NULL)
+	//Ist dieser Node aber leer...?
+		{
+			if(node)if(node->v)if(node->v->horiz_r) node->horiz_r=nb_find(node->v->horiz_r,searchdirection);
+
+		}
+	if(node->horiz_r!=NULL)
+		{
+			DEBUG("Der ermittelte rechte Node horiz_r von %s ist %s",node->index.c_str(),node->horiz_r->index.c_str());
+
+	 		node->horiz_r->horiz_l=node;	
+		}	
+}
+
+
+/*
+Situation:
+Rechter Node, rechten Nachbar ermitteln, Suchfolge 1 (nach rechts)
+*/
+
+if(npos==1 && searchdirection==1)
+{
+	node->horiz_r=NULL;
+
+	//hier koennen wir direkt ueber Vorganger->rechts suchen
+	if(node)if(node->v)if(node->v->horiz_r) node->horiz_r=nb_find(node->v->horiz_r,searchdirection);
+	
+		if(node->horiz_r!=NULL)
+		{
+		DEBUG("Der rechte Node horiz_r von %s ist %s",node->index.c_str(),node->horiz_r->index.c_str());
+		node->horiz_r->horiz_l=node;
+		}
+
+}
+
+/*
+Situation: rechter Node, linken Nachbar ermitteln, Suchfolge 0 (nach links)
+*/
+
+
+if(npos=1 && searchdirection==0)
+{
+
+        //Der einfachste Fall:
+        node->horiz_l=node->v->l;//der rechte Node meines Vorgaengers
+        if(node->horiz_l==NULL)
+        //Ist dieser Node aber leer...?
+                {
+                        node->horiz_l=nb_find(node->v->horiz_l,searchdirection);
+
+                }
+        if(node->horiz_l!=NULL)
+                {
+                        node->horiz_l->horiz_r=node;
+                }
+
+}
+
+
+
+/*
+Situation:
+Linker Node, linken Nachbar ermitteln, Suchfolge 0 (nach links)
+*/
+
+if(npos==0 && searchdirection==0)
+{
+                        //hier koennen wir direkt ueber Vorganger->rechts suchen
+                        node->horiz_l=nb_find(node->v->horiz_l,searchdirection);
+
+                if(node->horiz_l!=NULL)
+                {
+                node->horiz_l->horiz_r=node;
+                }
+
+}
+
+
+
+
+
+//----
+}
+
+
+
+
+template <class T_CONTAINERINHALT>
+inline int libxbkbtree<T_CONTAINERINHALT>::nodepos(libxbkbtree<T_CONTAINERINHALT> *node)
+{
+if(node)if(node->v)if(node->v->r==node){return 1;}
+return 0;
+//if(node->v->r==node){return 1;}else{return 0;}
+}
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::deltree(libxbkbtree<T_CONTAINERINHALT> *rootstart, string index_p)
+{
+libxbkbtree *node;
+
+if(rootstart==NULL){rootstart=root;}
+node=findnode(rootstart,index_p);
+
+if(node){
+  if(node->v!=NULL)
+    {
+        if(node->v->l==node){node->v->l==NULL;}
+        else
+        if(node->v->r==node){node->v->r=NULL;}      
+      
+    }
+if(node!=rootstart){ delete node;}else{delete node;root=new libxbkbtree;}
+
+
+ }//if node
+
+}
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::destroynode(libxbkbtree<T_CONTAINERINHALT> *node)
+{
+node->l=NULL; node->r=NULL; node->v=NULL; delete node;
+}
+
+template <class T_CONTAINERINHALT>
+libxbkbtree<T_CONTAINERINHALT>* libxbkbtree<T_CONTAINERINHALT>::findnode(libxbkbtree *startpos, string index_p)
+{
+libxbkbtree *node;
+node=startpos;
+
+  for(;;)
+   {
+     if(node == NULL){break;}//nichts gefunden
+     if(node->index == index_p){break;}
+
+     if(node->index <= startpos->index) { node= node->l; }
+      else{node=node->r;}
+   }
+return node;
+}
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::addnode(libxbkbtree *startpos, libxbkbtree *node)
+{
+   for(;;)
+   {
+     if(node->index <= startpos->index)
+     {
+      if(startpos->l != NULL) {startpos=startpos->l;}
+      else {startpos->l=node;node->v=startpos;break;}
+     }
+    if(node->index > startpos->index)
+    {
+    if(startpos->r != NULL) {startpos=startpos->r;}
+    else {startpos->r=node;node->v=startpos;break;}
+    }
+   }
+}
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::del(string index_p)
+{
+
+//ich brauche eine Liste mit allen Nodes, deren linke/rechte Nachbarn
+//neu berechnet werden sollen
+
+libxbkbtree *root_backup;
+libxbkbtree *node;
+
+libxbkbtree *node_vorgaenger;//vorgaenger von node
+libxbkbtree *node_nachfolgerL,*node_nachfolgerR;
+
+
+libxbkbtree *node_sort=NULL;//der neu einzusortierende Node
+libxbkbtree *node_sortA=NULL,*node_sortB=NULL;//links/rechts bei Top-Delete
+libxbkbtree *node_resort_start=NULL;//Startposition fuer Resort
+
+libxbkbtree *node_top;//neuer Top-Node falls 1. Node geloescht wird
+
+int node_position=0;//0=keine Position, 1=links,2 =rechts
+
+root_backup=root;
+node=root;
+
+node = findnode(NULL,index_p);
+
+if(node==NULL){puts("not found, abort");exit;}
+
+
+//in node ist das aktuelle Element
+node_vorgaenger=node->v;
+node_nachfolgerL=node->l;
+node_nachfolgerR=node->r;
+
+
+
+//bin ich links oder rechts bei meinem Vorgaenger?
+
+if(node==node_vorgaenger->l){node_position=1;} 
+else if(node==node_vorgaenger->r){node_position=2;}
+
+//Spezial: Habe keinen Vorgaenger, bin also ROOT
+if(node->v==node){node_position=0;}
+
+// wenn ich links bin, wird der rechte Block neu sortiert
+// wenn ich rechts bin umgekehrt
+// wenn ich keinen Vorgaenger habe, dann mal schaun hm
+
+
+//wir sind links
+if(node_position==1)
+ {
+  //mein linker Nachfolger wird der linke Nachfolger von mir 
+  node_vorgaenger->l=node->l;
+  node_sort=node->r;//der rechte Nachfolger von mir muss neu sortiert werden 
+  node_resort_start=node->l;
+ }
+else
+if(node_position==2)
+ {
+ //mein rechter Nachfolger wird der rechte Nachfolger von mir
+ node_vorgaenger->r=node->r;
+ node_sort=node->l;//der linke Nachfolger von mir muss neu sortiert werden
+ node_resort_start=node->r;
+ }
+
+if(node_sort!=NULL)
+ {
+ addnode(node_resort_start,node_sort);
+//unser node kann jetzt geloescht werden
+destroynode(node);
+ }
+
+// Problemzone: Wir sind der erste Node
+
+if(node_position==0)
+{
+//Wenn es einen rechten Node gibt, kommt der an meine Stelle
+//sonst der linke.
+ 
+ if(node_nachfolgerR !=NULL)
+ {
+ node_top=node_nachfolgerR;
+ node_sortA=node_nachfolgerR->l;
+ node_sortB=node_nachfolgerR->r;
+ node_top->l=node->l;
+ } 
+ else
+ if(node_nachfolgerL !=NULL)
+ {
+ node_top=node_nachfolgerL; 
+ node_sortA=node_nachfolgerL->l;
+ node_sortB=node_nachfolgerL->r;
+ }
+
+ //node A+B muessen neu einsortiert werden
+ //die Startposition ist node_top;
+
+ if(node_top==NULL){node_top = new libxbkbtree;}
+ root=node_top;
+
+ if(node_sortA != NULL) addnode(node_top,node_sortA);
+ if(node_sortB != NULL) addnode(node_top,node_sortB);
+ destroynode(node);
+
+}//0
+
+
+/*
+Hier kommt noch eine Beschreibung meiner Implementation hinein
+weil diese Marke Eigenbau ist, gell
+*/
+
+}  
+
+
+
+
+/*
+findnext:
+beim ersten Aufruf kann rootstart NULL sein. Beim naechsten Aufruf muss
+man rueckgabewert.l benutzen, weil gleiche Werte immer links im Baum sind
+Wenn die Suche beendet wurde, wird eine Exception vom Typ
+
+libxbkbtree_error_notfound 
+
+ausgeloest um zu verhindern, dass LEER oder irgendwas anderes
+zurueckgeliefert wird. 
+
+Diese Funktion ist fast wie findnode nur das hier eine Exception
+ausgeloest wird wenn nichts gefunden wurde.
+
+*/
+template <class T_CONTAINERINHALT>
+libxbkbtree<T_CONTAINERINHALT>* libxbkbtree<T_CONTAINERINHALT>::findnext(libxbkbtree *rootstart,string index_p)
+{
+if(!rootstart){rootstart=root;}
+libxbkbtree *node;
+node=findnode(rootstart,index_p);
+if(node=NULL)
+  {libxbkbtree_error_notfound x;throw x;}
+return node;    
+}
+
+
+template <class T_CONTAINERINHALT> 
+T_CONTAINERINHALT libxbkbtree<T_CONTAINERINHALT>::
+find(string index_p)
+{
+libxbkbtree *rootstart;
+rootstart=root;
+int suchschritte=0;
+
+//cout << "Suche nach " <<index_p << "\n";
+//cout << "Erstes Element in Root: " << root->index << "\n\n\n\n";
+
+
+for(;;)
+ {
+  if(rootstart->index==index_p) {break;}
+  if(rootstart->l == NULL && rootstart->r == NULL){libxbkbtree_error_notfound x;throw x;}
+  if(index_p < rootstart->index) {DEBUG("TL");rootstart=rootstart->l;}
+  if(index_p > rootstart->index) {DEBUG("TR");rootstart=rootstart->r;}
+++suchschritte;
+ };//for
+ DEBUG("Suche nach: %s, Suchschritte: %i\n",index_p.c_str(),suchschritte);
+ return rootstart->content;
+}
+
+
+template <class T_CONTAINERINHALT>
+void libxbkbtree<T_CONTAINERINHALT>::add(string index_p, T_CONTAINERINHALT content_p)
+{
+//neues Objekt erstellen
+libxbkbtree *rootstart,*objekt;
+objekt = new libxbkbtree;
+objekt->index=index_p; 
+objekt->content=content_p;
+objekt->deleted=0;
+objekt->l=NULL;objekt->r=NULL;
+if(!root){root=objekt;root->v=root;DEBUG("New root");return;}
+
+rootstart=root;          
+DEBUG("ROOT = start"); 
+//solange es einen linken oder rechten Zweig gibt, traversieren
+int schritte=0;
+
+for(;;)
+ {
+   //wenn unser Objekt kleiner ist, geh nach links wenn links nicht leer sonst add
+   if(index_p <= rootstart->index) 
+   {
+    if(rootstart->l != NULL) {DEBUG("TL"); 
+       rootstart=rootstart->l;}
+    else
+    {
+    objekt->v=rootstart;//Vorgaenger angeben, kann man mal brauchen
+    rootstart->l=objekt;DEBUG("ADD LINKS %s",objekt->index.c_str());break;
+    }
+   } 
+   //wenn unser Objekt groesser ist, geh nach rechts wenn rechts nicht leer sonst add
+
+   if(index_p > rootstart->index)
+   {
+    if(rootstart->r != NULL) {DEBUG("TR"); rootstart=rootstart->r;}
+    else
+    {
+     objekt->v=rootstart;
+     rootstart->r=objekt;DEBUG("ADD RECHTS %s",objekt->index.c_str());break;
+    }
+   }  
+
+
+ }//for
+}//fu
+
+template <class T_CONTAINERINHALT>
+libxbkbtree<T_CONTAINERINHALT>::libxbkbtree()
+{
+root=NULL;l=NULL;r=NULL;v=NULL;
+}
+
+
+template <class T_CONTAINERINHALT>
+libxbkbtree<T_CONTAINERINHALT>::~libxbkbtree()
+{
+DEBUG("Destruktor")
+if (l!=NULL) {delete l;} 
+if (r!=NULL) {delete r;} 
+}
